@@ -12,6 +12,7 @@ class LibsyncCommand(str, Enum):
     ID = "id"
     FILE = "file"
     YOUTUBE = "youtube"
+    EXPERIMENT = "experiment"
 
 
 RekordboxTrackID = str

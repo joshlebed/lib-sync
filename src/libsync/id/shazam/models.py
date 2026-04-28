@@ -133,3 +133,15 @@ class TrackMatch:
         self.match_timestamps.append(timestamp_ms)
         self.first_seen_ms = min(self.first_seen_ms, timestamp_ms)
         self.last_seen_ms = max(self.last_seen_ms, timestamp_ms)
+
+
+def compute_segment_content_hash(segment_path: str) -> str:
+    """SHA256 hash of segment file bytes, truncated to 20 hex chars.
+
+    Longer than the 16-char audio_file_hash because the global cache holds
+    cross-file entries — collision space needs more headroom.
+    """
+    hasher = hashlib.sha256()
+    with open(segment_path, "rb") as f:
+        hasher.update(f.read())
+    return hasher.hexdigest()[:20]

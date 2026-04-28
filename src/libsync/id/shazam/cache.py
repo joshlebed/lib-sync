@@ -162,6 +162,25 @@ class SegmentCache:
             ).fetchall()
             return {row["start_ms"] for row in rows}
 
+    def get_cached_segments_for_duration(
+        self, audio_hash: str, duration_ms: int
+    ) -> builtins.set[int]:
+        """Get cached segment start_ms values for a specific duration.
+
+        Args:
+            audio_hash: Audio file hash
+            duration_ms: Segment duration in milliseconds
+
+        Returns:
+            Set of start_ms values that are cached for the given duration
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT start_ms FROM segment_results WHERE audio_hash = ? AND duration_ms = ?",
+                (audio_hash, duration_ms),
+            ).fetchall()
+            return {row["start_ms"] for row in rows}
+
     def get_all_results(self, audio_hash: str) -> list[SegmentResult]:
         """Get all cached results for an audio file.
 

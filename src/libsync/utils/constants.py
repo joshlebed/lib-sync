@@ -1,5 +1,6 @@
 """contains constants used across modules"""
 
+import os
 from enum import Enum
 
 
@@ -34,7 +35,12 @@ NUM_SHAZAM_MATCHES_THRESHOLD = 4
 
 # Shazam processing configuration
 SHAZAM_SEGMENT_LENGTH_MS = 15000  # 15 seconds - optimal for Shazam accuracy
-SHAZAM_MAX_CONCURRENT = 1  # Max parallel Shazam API requests (set to 1 due to heavy rate limiting)
+SHAZAM_MAX_CONCURRENT = int(
+    os.environ.get("SHAZAM_MAX_CONCURRENT", "1")
+)  # Max parallel Shazam API requests (tunable via env var)
+SHAZAM_REQUEST_DELAY = float(
+    os.environ.get("SHAZAM_REQUEST_DELAY", "6.0")
+)  # Seconds between API requests (tunable via env var)
 SHAZAM_FFMPEG_WORKERS = 4  # Max parallel FFmpeg processes
 
 # Two-pass recognition strategy

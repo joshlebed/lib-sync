@@ -109,6 +109,8 @@ def get_youtube_download_output_template() -> str:
 SHAZAM_CACHE_DIR = LIBSYNC_DATA_DIR / "shazam_cache"
 SHAZAM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+SHAZAM_GLOBAL_CACHE_PATH = str(SHAZAM_CACHE_DIR / "shazam_global_cache.db")
+
 
 def get_shazam_segment_cache_path(audio_file_path: str) -> str:
     """Get path for Shazam segment-level cache database.

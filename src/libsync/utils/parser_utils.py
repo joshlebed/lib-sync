@@ -132,4 +132,22 @@ def get_cli_argparser():
         required=True,
     )
 
+    # experiment subcommand
+    parser_experiment = subsubparsers.add_parser(
+        LibsyncCommand.EXPERIMENT.value,
+        help="Run recognition experiments on an audio file",
+    )
+    parser_experiment.add_argument(
+        "--recording_audio_file_path",
+        type=str,
+        help="path to audio recording to experiment on",
+        required=True,
+    )
+    parser_experiment.add_argument(
+        "--experiments",
+        type=str,
+        default="all",
+        help="Comma-separated: contextual,reinforce,dense,multi_duration (default: all)",
+    )
+
     return parser

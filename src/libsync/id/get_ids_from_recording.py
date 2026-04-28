@@ -15,6 +15,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -23,8 +24,9 @@ from tqdm import tqdm
 
 from libsync.id.download_audio import download_mp3_from_youtube_url
 from libsync.id.shazam.cache import SegmentCache
+from libsync.id.shazam.global_cache import GlobalSegmentCache
 from libsync.id.shazam.models import SegmentCacheKey, SegmentResult, TrackMatch
-from libsync.id.shazam.recognizer import extract_and_recognize_parallel
+from libsync.id.shazam.recognizer import ShazamRecognizer, extract_and_recognize_parallel
 from libsync.id.youtube_dl_utils import (
     get_mp3_output_path,
     get_youtube_video_id_from_url,
@@ -38,10 +40,15 @@ from libsync.utils.constants import (
     SHAZAM_MIN_MATCHES,
     SHAZAM_PASS1_STEP_MS,
     SHAZAM_PASS2_STEP_MS,
+    SHAZAM_REQUEST_DELAY,
     SHAZAM_SEGMENT_LENGTH_MS,
     SHOW_URL_IN_SHAZAM_OUTPUT,
 )
-from libsync.utils.filepath_utils import LIBSYNC_DATA_DIR, get_shazam_segment_cache_path
+from libsync.utils.filepath_utils import (
+    LIBSYNC_DATA_DIR,
+    SHAZAM_GLOBAL_CACHE_PATH,
+    get_shazam_segment_cache_path,
+)
 
 if TYPE_CHECKING:
     pass
@@ -284,6 +291,8 @@ async def recognize_segments_two_pass(
     Returns:
         Dictionary mapping track_id to TrackMatch objects
     """
+    t_start = time.monotonic()
+
     # Get audio duration
     total_duration_ms = get_audio_duration_ms(audio_path)
     total_duration_str = str(timedelta(milliseconds=total_duration_ms))
@@ -293,10 +302,17 @@ async def recognize_segments_two_pass(
     audio_hash = SegmentCacheKey.compute_file_hash(audio_path)
     logger.info(f"Audio hash: {audio_hash}")
 
-    # Initialize cache
+    # Initialize caches
     cache_path = get_shazam_segment_cache_path(audio_path)
     cache = SegmentCache(cache_path)
-    logger.info(f"Using cache at: {cache_path}")
+    logger.info(f"Using per-file cache at: {cache_path}")
+
+    global_cache = GlobalSegmentCache(SHAZAM_GLOBAL_CACHE_PATH)
+    global_stats = global_cache.get_stats()
+    logger.info(
+        f"Using global cache at: {SHAZAM_GLOBAL_CACHE_PATH} "
+        f"({global_stats['total_entries']} entries)"
+    )
 
     # Setup results output file
     results_path = get_results_output_path(audio_path)
@@ -311,8 +327,18 @@ async def recognize_segments_two_pass(
     # Get already cached segments
     cached_segments = cache.get_cached_segments(audio_hash)
 
-    # Create temp directory
+    # Create temp directory and shared recognizer (so metrics accumulate across passes)
     temp_dir = tempfile.mkdtemp(prefix="libsync_shazam_")
+    recognizer = ShazamRecognizer(
+        max_concurrent=SHAZAM_MAX_CONCURRENT,
+        request_delay=SHAZAM_REQUEST_DELAY,
+    )
+
+    print(
+        f"Shazam concurrency: {SHAZAM_MAX_CONCURRENT}, "
+        f"request delay: {SHAZAM_REQUEST_DELAY}s "
+        f"(env vars: SHAZAM_MAX_CONCURRENT, SHAZAM_REQUEST_DELAY)"
+    )
 
     try:
         # === PASS 1: Discovery ===
@@ -325,6 +351,7 @@ async def recognize_segments_two_pass(
 
         if pass1_uncached:
             print(f"Pass 1: Identifying tracks ({len(pass1_uncached)} segments)...")
+            t_pass1 = time.monotonic()
             with tqdm(total=len(pass1_uncached), desc="Pass 1", unit="seg") as pbar:
 
                 def pass1_progress(done: int, total: int, phase: str) -> None:
@@ -341,7 +368,21 @@ async def recognize_segments_two_pass(
                     max_concurrent_shazam=SHAZAM_MAX_CONCURRENT,
                     max_ffmpeg_workers=SHAZAM_FFMPEG_WORKERS,
                     progress_callback=pass1_progress,
+                    recognizer=recognizer,
+                    global_cache=global_cache,
                 )
+
+            pass1_elapsed = time.monotonic() - t_pass1
+            metrics = recognizer.get_metrics()
+            print(
+                f"Pass 1 done in {pass1_elapsed:.1f}s — "
+                f"{metrics['total_api_calls']} API calls, "
+                f"{metrics['errors']} errors, "
+                f"{metrics['slow_calls_likely_retries']} slow, "
+                f"avg {metrics['avg_call_time_s']}s/call, "
+                f"max {metrics['max_call_time_s']}s, "
+                f"global cache hits: {metrics['global_cache_hits']}"
+            )
 
         # Aggregate pass 1 results
         pass1_results = cache.get_all_results(audio_hash)
@@ -368,6 +409,7 @@ async def recognize_segments_two_pass(
 
         if pass2_uncached:
             print(f"Pass 2: Filling gaps ({len(pass2_uncached)} segments)...")
+            t_pass2 = time.monotonic()
             with tqdm(total=len(pass2_uncached), desc="Pass 2", unit="seg") as pbar:
 
                 def pass2_progress(done: int, total: int, phase: str) -> None:
@@ -384,7 +426,82 @@ async def recognize_segments_two_pass(
                     max_concurrent_shazam=SHAZAM_MAX_CONCURRENT,
                     max_ffmpeg_workers=SHAZAM_FFMPEG_WORKERS,
                     progress_callback=pass2_progress,
+                    recognizer=recognizer,
+                    global_cache=global_cache,
                 )
+
+            pass2_elapsed = time.monotonic() - t_pass2
+            metrics = recognizer.get_metrics()
+            print(
+                f"Pass 2 done in {pass2_elapsed:.1f}s — "
+                f"{metrics['total_api_calls']} API calls total, "
+                f"{metrics['errors']} errors, "
+                f"{metrics['slow_calls_likely_retries']} slow, "
+                f"avg {metrics['avg_call_time_s']}s/call, "
+                f"max {metrics['max_call_time_s']}s, "
+                f"global cache hits: {metrics['global_cache_hits']}"
+            )
+
+        # === RETRY: Re-process any failed segments ===
+        all_expected = set(pass1_all) | set(pass2_all)
+        cached_segments = cache.get_cached_segments(audio_hash)
+        failed_segments = sorted(all_expected - cached_segments)
+        retry_cooldowns = [120, 300, 600]  # 2min, 5min, 10min — rate limits last 15-20min
+
+        for retry_attempt, cooldown in enumerate(retry_cooldowns):
+            if not failed_segments:
+                break
+            print(
+                f"\n{len(failed_segments)} segments failed — "
+                f"retrying after {cooldown}s cooldown (attempt {retry_attempt + 1}/{len(retry_cooldowns)})..."
+            )
+            await asyncio.sleep(cooldown)
+
+            # Use a fresh recognizer for retries so error metrics are clean.
+            # max_concurrent is forced to 1 (regardless of env) because retries
+            # mean we just hit the rate limiter — be maximally conservative.
+            retry_recognizer = ShazamRecognizer(
+                max_concurrent=1,
+                request_delay=SHAZAM_REQUEST_DELAY,
+            )
+
+            with tqdm(total=len(failed_segments), desc="Retry", unit="seg") as pbar:
+
+                def retry_progress(done: int, total: int, phase: str) -> None:
+                    if phase == "recognizing":
+                        pbar.update(1)
+
+                await extract_and_recognize_parallel(
+                    audio_path=audio_path,
+                    temp_dir=temp_dir,
+                    segments_to_process=failed_segments,
+                    audio_hash=audio_hash,
+                    segment_duration_ms=SHAZAM_SEGMENT_LENGTH_MS,
+                    cache=cache,
+                    max_concurrent_shazam=1,
+                    max_ffmpeg_workers=SHAZAM_FFMPEG_WORKERS,
+                    progress_callback=retry_progress,
+                    recognizer=retry_recognizer,
+                    global_cache=global_cache,
+                )
+
+            retry_metrics = retry_recognizer.get_metrics()
+            cached_segments = cache.get_cached_segments(audio_hash)
+            still_failed = sorted(all_expected - cached_segments)
+            recovered = len(failed_segments) - len(still_failed)
+            error_rate = (
+                retry_metrics["errors"] / retry_metrics["total_api_calls"]
+                if retry_metrics["total_api_calls"]
+                else 0
+            )
+            print(
+                f"Retry recovered {recovered}/{len(failed_segments)} segments "
+                f"(error rate: {error_rate:.0%})"
+            )
+            failed_segments = still_failed
+
+        if failed_segments:
+            print(f"\n{len(failed_segments)} segments still failed after retries")
 
         # Final aggregation
         all_results = cache.get_all_results(audio_hash)
@@ -401,11 +518,63 @@ async def recognize_segments_two_pass(
         write_results_file(results_path, audio_path, final_matches, stats, phase="Complete")
         print(f"\nResults saved to: {results_path}")
 
+        # Log recognition metrics for tuning
+        _write_recognition_metrics_log(
+            audio_path=audio_path,
+            concurrency=SHAZAM_MAX_CONCURRENT,
+            metrics=recognizer.get_metrics(),
+            wall_clock_s=round(time.monotonic() - t_start, 1),
+            pass1_segments=len(pass1_all),
+            pass2_segments=len(pass2_all),
+        )
+
         return final_matches
 
     finally:
         # Cleanup temp directory
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+RECOGNITION_METRICS_LOG_PATH = str(LIBSYNC_DATA_DIR / "shazam_recognition_metrics.jsonl")
+
+
+def _write_recognition_metrics_log(
+    audio_path: str,
+    concurrency: int,
+    metrics: dict[str, float | int],
+    wall_clock_s: float,
+    pass1_segments: int,
+    pass2_segments: int,
+) -> None:
+    """Append a JSON line of per-run recognition metrics for concurrency tuning."""
+    import json
+    from datetime import datetime
+
+    total_api = metrics["total_api_calls"]
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "audio_file": os.path.basename(audio_path),
+        "concurrency": concurrency,
+        "total_api_calls": total_api,
+        "errors": metrics["errors"],
+        "slow_calls": metrics["slow_calls_likely_retries"],
+        "slow_call_rate": round(metrics["slow_calls_likely_retries"] / total_api, 3)
+        if total_api
+        else 0,
+        "avg_call_time_s": metrics["avg_call_time_s"],
+        "max_call_time_s": metrics["max_call_time_s"],
+        "throughput_req_s": round(total_api / wall_clock_s, 1) if wall_clock_s else 0,
+        "wall_clock_s": wall_clock_s,
+        "global_cache_hits": metrics["global_cache_hits"],
+        "pass1_segments": pass1_segments,
+        "pass2_segments": pass2_segments,
+    }
+
+    with open(RECOGNITION_METRICS_LOG_PATH, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+    logger.info(f"Recognition metrics entry written to: {RECOGNITION_METRICS_LOG_PATH}")
+    print(f"Recognition metrics log: {RECOGNITION_METRICS_LOG_PATH}")
 
 
 def get_track_ids_from_audio_file(recording_audio_file_path: str) -> None:

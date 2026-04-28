@@ -14,6 +14,7 @@ from libsync.id.get_ids_from_recording import (
 )
 from libsync.spotify.spotify_auth import validate_spotify_env_vars
 from libsync.spotify.sync_rekordbox_to_spotify import sync_rekordbox_to_spotify
+from libsync.utils.filepath_utils import get_log_file_path
 from libsync.utils.parser_utils import get_cli_argparser
 from libsync.utils.rekordbox_library import LibsyncCommand
 
@@ -21,18 +22,24 @@ from libsync.utils.rekordbox_library import LibsyncCommand
 def setup_logger(logger):
     logger.setLevel(logging.DEBUG)
 
-    # create console handler and set level to debug
+    # Console handler
     ch = logging.StreamHandler()
     ch.setLevel(logging.DEBUG)
 
-    # create formatter
+    # File handler — write logs to timestamped file
+    log_path = get_log_file_path()
+    fh = logging.FileHandler(str(log_path))
+    fh.setLevel(logging.DEBUG)
+
+    # Shared formatter
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
-    # add formatter to ch
     ch.setFormatter(formatter)
+    fh.setFormatter(formatter)
 
-    # add ch to logger
     logger.addHandler(ch)
+    logger.addHandler(fh)
+
+    logger.debug(f"Log file: {log_path}")
 
 
 def get_rekordbox_xml_path_or_throw(args, logger):
@@ -98,6 +105,12 @@ def cli():
         )
 
     elif command == LibsyncCommand.ID:
+        # ID command defaults to INFO so users always see progress/results
+        if verbose == 0:
+            logger.setLevel(logging.INFO)
+            for handler in logger.handlers:
+                handler.setLevel(logging.INFO)
+
         subcommand = args.subcommand
         if subcommand == LibsyncCommand.FILE:
             recording_audio_file_path = args.recording_audio_file_path
@@ -106,6 +119,14 @@ def cli():
         elif subcommand == LibsyncCommand.YOUTUBE:
             youtube_url = args.youtube_url
             get_track_ids_from_youtube_link(youtube_url)
+
+        elif subcommand == LibsyncCommand.EXPERIMENT:
+            import asyncio
+
+            from libsync.id.experiments import run_all_experiments
+
+            experiments = args.experiments.split(",") if args.experiments != "all" else None
+            asyncio.run(run_all_experiments(args.recording_audio_file_path, experiments))
 
     logger.info(f"total runtime: {(time.time() - start_time):.3f} seconds")
 

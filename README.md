@@ -72,6 +72,10 @@ SPOTIPY_REDIRECT_URI=http://localhost:8080
 
 # Optional: Default path to Rekordbox XML export
 REKORDBOX_XML_PATH=/path/to/rekordbox_export.xml
+
+# Optional: Shazam recognition tuning
+SHAZAM_MAX_CONCURRENT=1        # Max parallel Shazam API requests (default: 1)
+SHAZAM_REQUEST_DELAY=6.0       # Seconds between API requests (default: 6.0)
 ```
 
 ### Spotify API Setup
@@ -123,6 +127,32 @@ libsync id file --recording_audio_file_path ~/Music/unknown_track.mp3
 # Identify from YouTube URL
 libsync id youtube --youtube_url "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
+
+The identification pipeline uses a two-pass Shazam recognition strategy (wide discovery pass, then dense gap-filling) with SQLite-backed caching. Results and caches are stored in `~/.libsync/data/shazam_cache/`.
+
+If any segments fail (typically due to Shazam rate limiting), the pipeline retries them up to 3 times with cooldowns of 2/5/10 minutes. Worst case the tail can add ~17 minutes — failures are uncommon but the pipeline favors correctness over speed.
+
+Per-run recognition metrics are appended to `~/.libsync/data/shazam_recognition_metrics.jsonl` for concurrency tuning.
+
+#### Recognition Experiments
+
+Run experiments to test different recognition strategies on an audio file. Experiments share the existing Shazam cache, so previously recognized segments are reused automatically.
+
+```bash
+# Run all 4 experiments (contextual rescoring, reinforcement, dense probing, multi-duration)
+libsync id experiment --recording_audio_file_path ~/Music/dj_set.mp3
+
+# Run specific experiments (comma-separated)
+libsync id experiment --recording_audio_file_path ~/Music/dj_set.mp3 --experiments contextual,reinforce
+```
+
+Available experiments:
+- **contextual**: Re-scores existing matches using position context (0 API calls)
+- **reinforce**: Dense probing around weak (1x) matches to confirm or strengthen them
+- **dense**: 15s segments every 5s across the entire recording
+- **multi_duration**: 10s and 25s segments at baseline positions to test duration sensitivity
+
+Results are written to `~/.libsync/data/shazam_experiment_results.jsonl` (structured) and per-experiment human-readable text files.
 
 ### Audio Analysis Scripts
 
@@ -201,9 +231,9 @@ libsync -vv sync
 
 ## Manual Track Matching
 
-After running sync at least once, Lib-Sync creates a CSV file in the `data/` directory with your track mappings. You can manually improve the matches:
+After running sync at least once, Lib-Sync creates a CSV file in `~/.libsync/data/` with your track mappings. You can manually improve the matches:
 
-1. Open the generated CSV file (e.g., `data/rekordbox_spotify_matches_YYYY-MM-DD.csv`)
+1. Open the generated CSV file in `~/.libsync/data/`
 2. To manually match a track:
    - Paste the Spotify track URL in the `Spotify URL (input)` column
    - For tracks not on Spotify, enter `libsync:NOT_ON_SPOTIFY` in the `Spotify URI` column
