@@ -480,6 +480,27 @@ def get_playlist_diffs(
     return spotify_playlist_write_jobs, new_spotify_additions
 
 
+def describe_spotify_uri(
+    uri: str,
+    reverse_rekordbox_to_spotify_map: dict[str, str],
+    collection: RekordboxCollection,
+) -> str:
+    """Human-readable label for a spotify URI in a diff summary.
+
+    Falls back to the raw URI when the track can't be resolved to a rekordbox
+    track (no mapping, or mapped but missing from the collection) so summary
+    lines are never silently dropped - which previously left empty
+    "Adding:"/"Removing:" headers with nothing underneath.
+    """
+    rb_track_id = reverse_rekordbox_to_spotify_map.get(uri)
+    if rb_track_id is not None and rb_track_id in collection:
+        rb_track = collection[rb_track_id]
+        return f"{rb_track.artist} - {rb_track.name}"
+    if rb_track_id is not None:
+        logger.warning(f"track {uri} in mapping but not in collection (deleted?)")
+    return f"{uri} (track not in rekordbox collection)"
+
+
 def print_spotify_playlist_changes_summary(
     spotify_playlist_write_jobs: list[list[str, list[str]]],
     libsync_owned_spotify_playlists: dict[str, list[str]],
@@ -516,21 +537,13 @@ def print_spotify_playlist_changes_summary(
         if added_tracks:
             log_and_print("        Adding:")
             for uri in sorted(added_tracks):
-                if uri in reverse_rekordbox_to_spotify_map:
-                    try:
-                        rb_track = collection[reverse_rekordbox_to_spotify_map[uri]]
-                        log_and_print(f"          {rb_track.artist} - {rb_track.name}")
-                    except KeyError:
-                        logger.warning(f"track {uri} in mapping but not in collection (deleted?)")
-                        log_and_print(f"          {uri} (track not in rekordbox collection)")
+                log_and_print(
+                    f"          {describe_spotify_uri(uri, reverse_rekordbox_to_spotify_map, collection)}"
+                )
 
         if removed_tracks:
             log_and_print("        Removing:")
             for uri in sorted(removed_tracks):
-                if uri in reverse_rekordbox_to_spotify_map:
-                    try:
-                        rb_track = collection[reverse_rekordbox_to_spotify_map[uri]]
-                        log_and_print(f"          {rb_track.artist} - {rb_track.name}")
-                    except KeyError:
-                        logger.error(f"failed to find track {uri} in collection")
-                        log_and_print(f"          {uri} (track not in rekordbox collection)")
+                log_and_print(
+                    f"          {describe_spotify_uri(uri, reverse_rekordbox_to_spotify_map, collection)}"
+                )
