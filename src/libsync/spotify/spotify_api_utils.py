@@ -30,6 +30,16 @@ async def get_from_spotify_with_retry(session, url, headers, params, description
                         )
                         await asyncio.sleep(retry_after)
                         continue
+                    if response.status == 401:
+                        # token expired/invalid - refresh it and retry with the
+                        # new token rather than burning attempts on a stale one.
+                        logger.warning(
+                            f"401 Unauthorized - refreshing Spotify access token. "
+                            f"Attempt {attempt + 1}/{constants.MAX_RETRIES}"
+                        )
+                        access_token = SpotifyAuthManager.get_access_token(force_refresh=True)
+                        headers = {**headers, "Authorization": f"Bearer {access_token}"}
+                        continue
                     if not response.ok:
                         logger.debug(
                             f"Response not OK: {response.status} - {await response.text()}"
@@ -68,6 +78,16 @@ async def modify_spotify_with_retry(session, url, headers, json, method, descrip
                             f"Rate limited. Retrying after {retry_after} seconds. Attempt {attempt + 1}/{constants.MAX_RETRIES}"
                         )
                         await asyncio.sleep(retry_after)
+                        continue
+                    if response.status == 401:
+                        # token expired/invalid - refresh it and retry with the
+                        # new token rather than burning attempts on a stale one.
+                        logger.warning(
+                            f"401 Unauthorized - refreshing Spotify access token. "
+                            f"Attempt {attempt + 1}/{constants.MAX_RETRIES}"
+                        )
+                        access_token = SpotifyAuthManager.get_access_token(force_refresh=True)
+                        headers = {**headers, "Authorization": f"Bearer {access_token}"}
                         continue
                     if not response.ok:
                         logger.debug(
