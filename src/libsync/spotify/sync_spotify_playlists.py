@@ -231,19 +231,28 @@ def sync_spotify_playlists(
             rekordbox_to_spotify_map,
         )
 
-        # Ask for confirmation
-        confirmation = input("\nDo you want to proceed with these changes? (y/n): ").lower().strip()
-        if confirmation != "y":
-            string_utils.print_libsync_status("Canceling playlist updates", level=2)
-        elif not dry_run:
-            string_utils.print_libsync_status("Updating Spotify playlists", level=1)
-
-            logger.info(f"running overwrite_playlists with {len(spotify_playlist_write_jobs)} jobs")
-            spotify_api_utils.overwrite_playlists(spotify_playlist_write_jobs)
-            string_utils.print_libsync_status_success("Done", level=1)
-
+        # In a dry run we don't write, so don't prompt for a confirmation we'll
+        # ignore - that misleads the user into thinking changes were applied (and
+        # idling at the prompt can expire the Spotify token mid-run).
+        if dry_run:
+            string_utils.print_libsync_status(
+                "Dry run - no changes made. "
+                "Re-run with --overwrite_spotify_playlists to apply these changes.",
+                level=2,
+            )
         else:
-            string_utils.print_libsync_status("Dry run, skipping", level=2)
+            confirmation = (
+                input("\nDo you want to proceed with these changes? (y/n): ").lower().strip()
+            )
+            if confirmation != "y":
+                string_utils.print_libsync_status("Canceling playlist updates", level=2)
+            else:
+                string_utils.print_libsync_status("Updating Spotify playlists", level=1)
+                logger.info(
+                    f"running overwrite_playlists with {len(spotify_playlist_write_jobs)} jobs"
+                )
+                spotify_api_utils.overwrite_playlists(spotify_playlist_write_jobs)
+                string_utils.print_libsync_status_success("Done", level=1)
 
     if overwrite_spotify_playlists or len(new_spotify_additions) < 1:
         string_utils.print_libsync_status("No Rekordbox playlists to update", level=1)
