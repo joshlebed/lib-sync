@@ -51,8 +51,12 @@ class SpotifyAuthManager:
 
     # relies on get_auth_manager
     @classmethod
-    def get_access_token(cls) -> str:
-        if cls._access_token is None:
+    def get_access_token(cls, force_refresh: bool = False) -> str:
+        # spotipy's auth manager validates expiry and refreshes using the cached
+        # refresh token, so re-fetching yields a valid token. We memoize the
+        # string for the common path and re-fetch when force_refresh is set (e.g.
+        # a caller got a 401 because the token expired mid-run).
+        if cls._access_token is None or force_refresh:
             auth_manager = cls.get_auth_manager()
             cls._access_token = auth_manager.get_access_token(as_dict=False)
         return cls._access_token

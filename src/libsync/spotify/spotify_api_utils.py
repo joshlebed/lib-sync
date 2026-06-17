@@ -30,6 +30,16 @@ async def get_from_spotify_with_retry(session, url, headers, params, description
                         )
                         await asyncio.sleep(retry_after)
                         continue
+                    if response.status == 401:
+                        # token expired/invalid - refresh it and retry with the
+                        # new token rather than burning attempts on a stale one.
+                        logger.warning(
+                            f"401 Unauthorized - refreshing Spotify access token. "
+                            f"Attempt {attempt + 1}/{constants.MAX_RETRIES}"
+                        )
+                        access_token = SpotifyAuthManager.get_access_token(force_refresh=True)
+                        headers = {**headers, "Authorization": f"Bearer {access_token}"}
+                        continue
                     if not response.ok:
                         logger.debug(
                             f"Response not OK: {response.status} - {await response.text()}"
@@ -68,6 +78,16 @@ async def modify_spotify_with_retry(session, url, headers, json, method, descrip
                             f"Rate limited. Retrying after {retry_after} seconds. Attempt {attempt + 1}/{constants.MAX_RETRIES}"
                         )
                         await asyncio.sleep(retry_after)
+                        continue
+                    if response.status == 401:
+                        # token expired/invalid - refresh it and retry with the
+                        # new token rather than burning attempts on a stale one.
+                        logger.warning(
+                            f"401 Unauthorized - refreshing Spotify access token. "
+                            f"Attempt {attempt + 1}/{constants.MAX_RETRIES}"
+                        )
+                        access_token = SpotifyAuthManager.get_access_token(force_refresh=True)
+                        headers = {**headers, "Authorization": f"Bearer {access_token}"}
                         continue
                     if not response.ok:
                         logger.debug(
@@ -125,53 +145,54 @@ async def fetch_additional_playlists_worker(session, access_token, user_id, limi
 
 
 async def overwrite_playlists_worker(session, access_token, playlist_id, track_uri_list):
-    logger.debug(f"clearing playlist: {playlist_id}, then adding {len(track_uri_list)} tracks.")
+    logger.debug(f"overwriting playlist {playlist_id} with {len(track_uri_list)} tracks.")
     pages = [
         track_uri_list[i : i + constants.SPOTIFY_API_ITEMS_PER_PAGE]
         for i in range(0, len(track_uri_list), constants.SPOTIFY_API_ITEMS_PER_PAGE)
     ]
-    if len(pages) < 1:
-        return []
 
     responses = []
     headers = {"Authorization": f"Bearer {access_token}"}
     url = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
 
-    # first page - clear the playlist
-    json = {"uris": []}
+    # PUT (Replace Playlist Items) overwrites the entire playlist with the given
+    # page in a single request. For playlists that fit in one page (<=100 tracks,
+    # the common case) this is the whole update - atomic, with no intermediate
+    # empty state. An empty target clears the playlist. Only longer playlists
+    # need follow-up POSTs to append the remaining pages, and even then a failure
+    # mid-append leaves the playlist truncated rather than empty, and the next
+    # sync re-runs the overwrite from scratch.
+    first_page = pages[0] if pages else []
     try:
         response_data = await modify_spotify_with_retry(
-            session, url, headers, json, "PUT", f"clearing playlist {playlist_id}"
+            session,
+            url,
+            headers,
+            {"uris": first_page},
+            "PUT",
+            f"overwriting playlist {playlist_id}",
         )
         responses.append(response_data)
 
-        # Add delay between clearing and adding tracks to avoid rate limits
-        await asyncio.sleep(1)
-
-        # following pages - add tracks with delay between batches
-        for i, page in enumerate(pages):
-            json = {"uris": page}
+        # append remaining pages (only reached for playlists longer than one page)
+        for page in pages[1:]:
+            # delay between batches to reduce rate limiting
+            await asyncio.sleep(0.5)
             response_data = await modify_spotify_with_retry(
                 session,
                 url,
                 headers,
-                json,
+                {"uris": page},
                 "POST",
                 f"adding tracks to playlist {playlist_id}",
             )
             responses.append(response_data)
 
-            # Add delay between batches to reduce rate limiting
-            if i < len(pages) - 1:
-                await asyncio.sleep(0.5)
-
         return responses
     except ConnectionError as e:
         logger.error(f"Failed to update playlist {playlist_id}: {e}")
         # Return partial responses if we have any
-        if responses:
-            return responses
-        return []
+        return responses
 
 
 async def fetch_spotify_song_details_worker(
@@ -305,8 +326,20 @@ async def overwrite_playlists_controller(
 ):
     access_token = SpotifyAuthManager.get_access_token()
     async with aiohttp.ClientSession() as session:
+        # cap how many playlists we overwrite at once - firing every job
+        # concurrently bursts the Spotify API and triggers 429s (which then risk
+        # leaving large, multi-page playlists half-written). the semaphore smooths
+        # the burst while still overlapping requests.
+        semaphore = asyncio.Semaphore(constants.SPOTIFY_API_MAX_CONCURRENT_PLAYLIST_WRITES)
+
+        async def overwrite_with_limit(playlist_id, track_uri_list):
+            async with semaphore:
+                return await overwrite_playlists_worker(
+                    session, access_token, playlist_id, track_uri_list
+                )
+
         tasks = [
-            overwrite_playlists_worker(session, access_token, playlist_id, track_uri_list)
+            overwrite_with_limit(playlist_id, track_uri_list)
             for playlist_id, track_uri_list in params_list
         ]
 
