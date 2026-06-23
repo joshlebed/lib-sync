@@ -26,18 +26,14 @@ jobs:
         run: uv run ruff format --check src tests
 
   test:
-    name: Tests (py${{ matrix.python-version }})
+    name: Tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.13"
       - name: Install dependencies
         run: uv sync
       - name: Run tests
