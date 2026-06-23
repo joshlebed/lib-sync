@@ -52,9 +52,12 @@ addopts = "-ra"
 # Put tests/ on sys.path so test modules can `import factories` (shared builders).
 pythonpath = ["tests"]
 # Silence known third-party noise (pydub, pulled in transitively via shazamio)
-# so genuine warnings from our own code stay visible.
+# so genuine warnings from our own code stay visible. The "invalid escape
+# sequence" warning is a SyntaxWarning on 3.12+ but a DeprecationWarning on
+# 3.11, so it's matched by message regardless of category.
 filterwarnings = [
-    "ignore:invalid escape sequence:SyntaxWarning",
+    "ignore:invalid escape sequence",
+    "ignore:'audioop' is deprecated",
     "ignore:Couldn't find ffmpeg or avconv:RuntimeWarning",
 ]
 
