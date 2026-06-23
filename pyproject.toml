@@ -54,7 +54,7 @@ pythonpath = ["tests"]
 # Silence known third-party noise (pydub, pulled in transitively via shazamio)
 # so genuine warnings from our own code stay visible.
 filterwarnings = [
-    "ignore::SyntaxWarning:pydub.*",
+    "ignore:invalid escape sequence:SyntaxWarning",
     "ignore:Couldn't find ffmpeg or avconv:RuntimeWarning",
 ]
 
