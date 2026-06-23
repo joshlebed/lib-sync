@@ -48,6 +48,28 @@ def reset_spotify_auth_singleton():
     _clear()
 
 
+@pytest.fixture(autouse=True)
+def reset_log_file_handle():
+    """Reset string_utils' lazily-opened log handle around each test.
+
+    The handle is cached at module level, so without this the first test to log
+    anything would open a file in *its* tmp dir and every later test would keep
+    writing to that (now-deleted) directory. Resetting per-test means each test's
+    log lands in its own isolated LIBSYNC_DATA_DIR, and closing it avoids leaking
+    an unclosed file handle (ResourceWarning).
+    """
+    from libsync.utils import string_utils
+
+    def _close():
+        if string_utils._output_file is not None:
+            string_utils._output_file.close()
+            string_utils._output_file = None
+
+    _close()
+    yield
+    _close()
+
+
 @pytest.fixture
 def fake_spotify_auth(monkeypatch):
     """Stub out Spotify auth so no real credentials or network are needed.
