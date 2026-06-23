@@ -2,6 +2,7 @@ TODO.txt
 
 dist
 *.pyc
+__pycache__/
 libsync/__pycache__
 .venv
 .env
@@ -10,3 +11,8 @@ src/lib_sync.egg-info/
 .cache-*
 .cache
 data/
+
+# test / tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

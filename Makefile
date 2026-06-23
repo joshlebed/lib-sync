@@ -1,7 +1,10 @@
-.PHONY: help sync sync-check sync-overwrite analyze
+.PHONY: help sync sync-check sync-overwrite analyze test
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+test: ## Run the test suite
+	uv run pytest
 
 sync: ## Fetch fresh Spotify data, match tracks, and show diff
 	uv run libsync sync --dry_run
