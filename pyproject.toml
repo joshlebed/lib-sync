@@ -51,6 +51,12 @@ asyncio_mode = "auto"
 addopts = "-ra"
 # Put tests/ on sys.path so test modules can `import factories` (shared builders).
 pythonpath = ["tests"]
+# Silence known third-party noise (pydub, pulled in transitively via shazamio)
+# so genuine warnings from our own code stay visible.
+filterwarnings = [
+    "ignore::SyntaxWarning:pydub.*",
+    "ignore:Couldn't find ffmpeg or avconv:RuntimeWarning",
+]
 
 [tool.ruff]
 line-length = 100
