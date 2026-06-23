@@ -37,10 +37,20 @@ dev = [
     "nbstripout==0.8.1",
     "twine>=6.1.0",
     "mypy>=1.16.1",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "aioresponses>=0.7.6",
 ]
 
 [tool.uv]
 package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra"
+# Put tests/ on sys.path so test modules can `import factories` (shared builders).
+pythonpath = ["tests"]
 
 [tool.ruff]
 line-length = 100

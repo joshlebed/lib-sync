@@ -10,8 +10,17 @@ from libsync.utils.constants import ARTIST_LIST_DELIMITERS, SPOTIFY_TRACK_URI_PR
 from libsync.utils.filepath_utils import get_log_file_path
 from libsync.utils.rekordbox_library import RekordboxTrack
 
-# Create log file
-output_file = open(get_log_file_path(), "w")
+# Lazily-opened mirror of console output. Opened on first write rather than at
+# import time so that merely importing this module (e.g. for pure-logic helpers,
+# or running `--help`) doesn't create a log file on disk.
+_output_file = None
+
+
+def _get_output_file():
+    global _output_file
+    if _output_file is None:
+        _output_file = open(get_log_file_path(), "w")
+    return _output_file
 
 
 def get_spotify_uri_from_url(spotify_url: str) -> str:
@@ -123,12 +132,12 @@ def print_libsync_status(status_message, level=0, arrow_color=Fore.BLUE, text_co
     print(message)
     # Remove ANSI color codes and escape sequences before writing to file
     clean_message = re.sub(r"\033\[\d+(;\d+)*m", "", message)
-    output_file.write(clean_message + "\n")
+    _get_output_file().write(clean_message + "\n")
 
 
 def log_and_print(message):
     print(message)
-    output_file.write(message + "\n")
+    _get_output_file().write(message + "\n")
 
 
 def print_libsync_status_success(status_message, level=0):
